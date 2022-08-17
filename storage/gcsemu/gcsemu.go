@@ -166,6 +166,14 @@ func (g *GcsEmu) Handler(w http.ResponseWriter, r *http.Request) {
 			// unsupported method, or maybe should never happen
 			g.gapiError(w, http.StatusBadRequest, fmt.Sprintf("unsupported POST request: %v\n%s", r.URL, maybeNotImplementedErrorMsg))
 		}
+	case "PUT":
+		contents, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			g.gapiError(w, http.StatusBadRequest, "failed to load object content")
+			return
+		}
+
+		g.handleGcsPutObject(ctx, baseUrl, contents, w, bucket, object, conds)
 	default:
 		g.gapiError(w, http.StatusMethodNotAllowed, "")
 	}
@@ -642,6 +650,27 @@ func (g *GcsEmu) finishUpload(ctx context.Context, baseUrl HttpBaseUrl, obj *sto
 		return nil, fmt.Errorf("failed to get meta for %s/%s: %w", bucket, filename, err)
 	}
 	return meta, nil
+}
+
+func (g *GcsEmu) handleGcsPutObject(ctx context.Context, baseUrl HttpBaseUrl, contents []byte, w http.ResponseWriter, bucket, object string, conds cloudstorage.Conditions) {
+	obj := storage.Object{}
+	obj.Bucket = bucket
+	obj.Name = object
+	obj.Size = uint64(len(contents))
+
+	meta, err := g.finishUpload(ctx, baseUrl, &obj, contents, bucket, conds)
+	if err != nil {
+		g.gapiError(w, httpStatusCodeOf(err), err.Error())
+		return
+	}
+
+	w.Header().Set("Location", ObjectUrl(baseUrl, bucket, obj.Name))
+	w.Header().Set("Content-Type", obj.ContentType)
+	w.Header().Set("x-goog-generation", strconv.FormatInt(meta.Generation, 10))
+	w.Header().Set("X-Goog-Metageneration", strconv.FormatInt(meta.Metageneration, 10))
+	w.WriteHeader(http.StatusOK)
+
+	g.jsonRespond(w, meta)
 }
 
 // Returns true if item is strictly greater than anything that begins with prefix
